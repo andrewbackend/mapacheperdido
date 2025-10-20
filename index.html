@@ -1,0 +1,266 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>El Mapache Perdido</title>
+  <style>
+    :root{--cell:48px;--cols:10;--rows:10}
+    body{font-family:Inter,system-ui,Segoe UI,Arial;background:#f7f7fb;color:#111;margin:0;display:flex;gap:20px;min-height:100vh;align-items:flex-start;padding:24px}
+    .app{display:flex;gap:20px;align-items:flex-start}
+    .board{background:#fff;padding:12px;border-radius:12px;box-shadow:0 6px 20px rgba(16,24,40,.08)}
+    canvas{background:linear-gradient(180deg,#dff0ff,#fff);display:block;border-radius:8px}
+    .controls{width:360px}
+    h1{margin:0 0 6px;font-size:18px}
+    p.small{margin:4px 0 12px;color:#555;font-size:13px}
+    textarea{width:100%;height:120px;padding:10px;border-radius:8px;border:1px solid #d0d7de;resize:vertical;font-family:monospace}
+    .row{display:flex;gap:8px;align-items:center;margin-bottom:8px}
+    button{background:#0366d6;color:#fff;border:none;padding:8px 12px;border-radius:8px;cursor:pointer}
+    button.secondary{background:#e6eefc;color:#03396b}
+    .hint{font-size:13px;color:#333;line-height:1.4}
+    .status{margin-top:10px;padding:10px;border-radius:8px;background:#fff8dc;border:1px solid #ffe6a7}
+    label{font-size:13px;color:#333}
+    .examples button{background:#f1f5fb;color:#0a3b6e;padding:6px 8px}
+    .legend{display:flex;gap:8px;margin-top:8px;align-items:center}
+    .legend div{display:flex;gap:6px;align-items:center;font-size:13px}
+    .sw{width:18px;height:18px;border-radius:4px}
+    .wall{background:#111}
+    .path{background:#fff}
+    .goal{background:#ffd700}
+    .start{background:#6ee7b7}
+    footer{margin-top:12px;font-size:12px;color:#666}
+  </style>
+</head>
+<body>
+  <div class="app">
+    <div class="board">
+      <h1>El Mapache Perdido 🧭</h1>
+      <p class="small">Dibuja el algoritmo (por ejemplo: <code>avanzar 3, girar izquierda, avanzar 2</code>) y presiona <strong>Ejecutar</strong>.</p>
+      <canvas id="canvas" width="480" height="480"></canvas>
+      <div class="legend">
+        <div><span class="sw wall"></span> Pared</div>
+        <div><span class="sw path"></span> Piso</div>
+        <div><span class="sw start"></span> Entrada</div>
+        <div><span class="sw goal"></span> Salida</div>
+      </div>
+    </div>
+
+    <div class="controls">
+      <label>Instrucciones (una por comas o nueva línea). Comandos permitidos: <strong>avanzar N</strong>, <strong>girar izquierda</strong>, <strong>girar derecha</strong>, <strong>avanzar</strong> (equivale a 1).</label>
+      <textarea id="program">avanzar 3, girar derecha, avanzar 2, girar izquierda, avanzar 4</textarea>
+
+      <div class="row">
+        <button id="run">Ejecutar</button>
+        <button id="step" class="secondary">Paso</button>
+        <button id="reset" class="secondary">Reiniciar</button>
+        <div style="margin-left:auto;display:flex;gap:8px;align-items:center"><label>Velocidad</label>
+          <input id="speed" type="range" min="50" max="800" value="250"></div>
+      </div>
+
+      <div class="row examples">
+        <label>Ejemplos:</label>
+        <button data-program="avanzar 3, girar derecha, avanzar 2">Camino A</button>
+        <button data-program="avanzar 5, girar derecha, avanzar 3">Camino B</button>
+        <button id="shuffle">Mapa Aleatorio</button>
+      </div>
+
+      <div class="status" id="status">Estado: listo. Usa <strong>Ejecutar</strong> para correr el algoritmo.</div>
+      <footer>Si el mapa muestra que el mapache toca una pared en algún paso, la secuencia falla — corrige el algoritmo y vuelve a intentar.</footer>
+    </div>
+  </div>
+
+  <script>
+    // Grid and map setup
+    const COLS = 10, ROWS = 10, CELL = 48;
+    const canvas = document.getElementById('canvas');
+    const ctx = canvas.getContext('2d');
+
+    // 0 = floor, 1 = wall
+    let map = [
+      [1,1,1,1,1,1,1,1,1,1],
+      [1,0,0,0,0,0,1,0,0,1],
+      [1,0,1,1,0,0,1,0,0,1],
+      [1,0,0,1,0,0,1,0,0,1],
+      [1,0,0,1,0,0,0,0,0,1],
+      [1,0,0,1,0,1,1,1,0,1],
+      [1,0,0,0,0,0,0,1,0,1],
+      [1,0,1,1,1,1,0,1,0,1],
+      [1,0,0,0,0,0,0,0,0,1],
+      [1,1,1,1,1,1,1,1,1,1]
+    ];
+
+    let start = {x:1,y:1};
+    let goal = {x:8,y:8};
+
+    let player = {x:start.x,y:start.y,dir:1}; // dir:0 up,1 right,2 down,3 left
+    let running = false;
+    let commands = [];
+    let ip = 0; // instruction pointer
+    let pendingSteps = []; // expanded atomic steps
+    let speed = 250;
+
+    function draw(){
+      ctx.clearRect(0,0,canvas.width,canvas.height);
+      // draw grid
+      for(let r=0;r<ROWS;r++){
+        for(let c=0;c<COLS;c++){
+          let cell = map[r][c];
+          let x = c*CELL, y = r*CELL;
+          if(cell===1){ ctx.fillStyle = '#111'; ctx.fillRect(x,y,CELL,CELL); }
+          else { ctx.fillStyle = '#ffffff'; ctx.fillRect(x,y,CELL,CELL); }
+          ctx.strokeStyle = '#e6eefc'; ctx.strokeRect(x+0.5,y+0.5,CELL-1,CELL-1);
+        }
+      }
+      // start & goal
+      ctx.fillStyle='#6ee7b7'; ctx.fillRect(start.x*CELL+6, start.y*CELL+6, CELL-12, CELL-12);
+      ctx.fillStyle='#ffd700'; ctx.fillRect(goal.x*CELL+6, goal.y*CELL+6, CELL-12, CELL-12);
+
+      // draw path highlight if running
+      // draw player as raccoon emoji
+      ctx.save();
+      ctx.translate(player.x*CELL + CELL/2, player.y*CELL + CELL/2);
+      ctx.rotate(player.dir * Math.PI/2);
+      ctx.font = '28px serif';
+      ctx.textAlign='center'; ctx.textBaseline='middle';
+      ctx.fillText('🦝', 0, 0);
+      ctx.restore();
+    }
+
+    function parseProgram(text){
+      // split by commas or newlines
+      let parts = text.split(/[,\n]+/).map(s=>s.trim()).filter(Boolean);
+      let parsed = [];
+      for(let p of parts){
+        let m = p.match(/^avanzar(?:\s+(\d+))?$/i);
+        if(m){ parsed.push({cmd:'avanzar',n: m[1]?parseInt(m[1],10):1}); continue; }
+        if(/^girar\s+izquierda$/i.test(p)){ parsed.push({cmd:'girar',dir:'izquierda'}); continue; }
+        if(/^girar\s+derecha$/i.test(p)){ parsed.push({cmd:'girar',dir:'derecha'}); continue; }
+        // allow short forms: F3, L, R
+        let short = p.match(/^F(\d+)$/i);
+        if(short){ parsed.push({cmd:'avanzar',n:parseInt(short[1],10)}); continue; }
+        if(/^L$/i.test(p)){ parsed.push({cmd:'girar',dir:'izquierda'}); continue; }
+        if(/^R$/i.test(p)){ parsed.push({cmd:'girar',dir:'derecha'}); continue; }
+        // if unknown
+        parsed.push({cmd:'unknown',raw:p});
+      }
+      return parsed;
+    }
+
+    function expandToSteps(parsed){
+      let steps = [];
+      for(let ins of parsed){
+        if(ins.cmd==='avanzar'){
+          for(let i=0;i<ins.n;i++) steps.push({act:'avanzar'});
+        } else if(ins.cmd==='girar'){
+          steps.push({act:'girar',dir:ins.dir});
+        } else {
+          steps.push({act:'unknown',raw:ins.raw});
+        }
+      }
+      return steps;
+    }
+
+    function stepOnce(){
+      if(ip>=pendingSteps.length) { setStatus('Terminado: el algoritmo terminó.'); running=false; return false; }
+      let s = pendingSteps[ip];
+      if(s.act==='avanzar'){
+        // compute next position
+        let nx=player.x, ny=player.y;
+        if(player.dir===0) ny--;
+        if(player.dir===1) nx++;
+        if(player.dir===2) ny++;
+        if(player.dir===3) nx--;
+        // check bounds and wall
+        if(nx<0||nx>=COLS||ny<0||ny>=ROWS||map[ny][nx]===1){
+          draw();
+          highlightCell(nx,ny,'#ffb4b4');
+          setStatus(`Fallo en paso ${ip+1}: chocó con pared en (${nx},${ny}). Corrige el algoritmo.`);
+          running=false; return false;
+        }
+        // move
+        player.x=nx; player.y=ny;
+        draw(); ip++;
+        if(player.x===goal.x && player.y===goal.y){ setStatus(`¡Éxito! El mapache llegó a la salida en el paso ${ip}.`); running=false; return false; }
+        return true;
+      } else if(s.act==='girar'){
+        if(s.dir==='izquierda') player.dir = (player.dir + 3) % 4;
+        else player.dir = (player.dir + 1) % 4;
+        draw(); ip++; return true;
+      } else {
+        setStatus('Error: comando desconocido -> "'+s.raw+'"'); running=false; return false;
+      }
+    }
+
+    function highlightCell(cx,cy,color){
+      if(cx<0||cx>=COLS||cy<0||cy>=ROWS) return;
+      ctx.fillStyle=color; ctx.fillRect(cx*CELL+2,cy*CELL+2,CELL-4,CELL-4);
+      // redraw player
+      ctx.save(); ctx.translate(player.x*CELL + CELL/2, player.y*CELL + CELL/2); ctx.rotate(player.dir * Math.PI/2);
+      ctx.font = '28px serif'; ctx.textAlign='center'; ctx.textBaseline='middle'; ctx.fillText('🦝', 0, 0); ctx.restore();
+    }
+
+    function runProgram(){
+      if(running) return;
+      resetPlayer(false);
+      const text = document.getElementById('program').value;
+      const parsed = parseProgram(text);
+      pendingSteps = expandToSteps(parsed);
+      ip = 0;
+      if(pendingSteps.length===0){ setStatus('No hay instrucciones'); return; }
+      running = true; setStatus('Ejecutando...');
+      function loop(){
+        if(!running) return;
+        let ok = stepOnce();
+        if(ok){ setTimeout(loop, speed); }
+      }
+      setTimeout(loop, speed);
+    }
+
+    function stepProgram(){
+      if(running) return;
+      if(pendingSteps.length===0){ resetPlayer(false); const text = document.getElementById('program').value; pendingSteps = expandToSteps(parseProgram(text)); ip=0; }
+      let ok = stepOnce();
+      if(!ok) running=false;
+    }
+
+    function resetPlayer(full=true){
+      player.x = start.x; player.y = start.y; player.dir = 1; ip=0; pendingSteps=[]; running=false; draw(); setStatus('Listo.');
+      if(full){ document.getElementById('program').value = document.getElementById('program').value; }
+    }
+
+    function setStatus(txt){ document.getElementById('status').innerHTML = 'Estado: ' + txt; }
+
+    // UI hooks
+    document.getElementById('run').addEventListener('click', ()=>{ runProgram(); });
+    document.getElementById('step').addEventListener('click', ()=>{ stepProgram(); });
+    document.getElementById('reset').addEventListener('click', ()=>{ resetPlayer(true); });
+    document.getElementById('speed').addEventListener('input', (e)=>{ speed = parseInt(e.target.value,10); });
+
+    document.querySelectorAll('.examples button[data-program]').forEach(b=>{
+      b.addEventListener('click', ()=>{ document.getElementById('program').value = b.dataset.program; resetPlayer(true); });
+    });
+
+    document.getElementById('shuffle').addEventListener('click', ()=>{ randomizeMap(); resetPlayer(true); draw(); });
+
+    // random map generator (keeps borders)
+    function randomizeMap(){
+      for(let r=1;r<ROWS-1;r++){
+        for(let c=1;c<COLS-1;c++){
+          map[r][c] = Math.random()<0.22?1:0;
+        }
+      }
+      // ensure start & goal clear
+      map[start.y][start.x]=0; map[goal.y][goal.x]=0;
+    }
+
+    // keyboard support for quick testing
+    window.addEventListener('keydown',(e)=>{
+      if(e.key==='Enter' && (e.ctrlKey||e.metaKey)){ runProgram(); }
+    });
+
+    // initial draw
+    draw();
+
+  </script>
+</body>
+</html>
